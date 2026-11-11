@@ -323,7 +323,6 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
 
     scan_button = st.sidebar.button("🚀 Jalankan Live Scan Potensi Reversal Zigzag")
 
-    # Inisialisasi state session untuk menyimpan pilihan emiten agar tidak mereset
     if "selected_scan_stock" not in st.session_state:
         st.session_state["selected_scan_stock"] = None
 
@@ -354,16 +353,23 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
                         df["ChangePct"] = df["Close"].pct_change()
                         r_today = df["ChangePct"].iloc[-1]
                         rsi_val = df["RSI"].iloc[-1]
+                        
+                        last_close = df["Close"].iloc[-1]
+                        vol_today = df["Volume"].iloc[-1]
+                        
+                        # Nilai transaksi/volume dalam Rupiah (Volume lembar saham * Harga Close)
+                        total_transaksi_rupiah = vol_today * last_close
 
-                        if r_today <= max_red and rsi_val <= 45:
-                            last_close = df["Close"].iloc[-1]
-                            change = df["ChangePct"].iloc[-1] * 100
+                        # Filter: Penurunan hari ini, RSI Oversold/Ideal, dan Volume/Nilai Transaksi > 5 Miliar Rupiah
+                        if r_today <= max_red and rsi_val <= 45 and total_transaksi_rupiah >= 5_000_000_000:
+                            change = r_today * 100
                             matched_results.append({
                                 "Emiten": ticker.replace(".JK", ""),
                                 "Harga Terakhir": f"{int(round(last_close)):,}",
                                 "Return (%)": change,
                                 "RSI": round(rsi_val, 1),
-                                "Volume": f"{int(df['Volume'].iloc[-1]):,}",
+                                "Nilai Transaksi (Rp)": total_transaksi_rupiah,
+                                "Volume Saham": f"{int(vol_today):,}",
                             })
                 except Exception:
                     continue
@@ -374,13 +380,16 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
         if matched_results:
             st.session_state["selected_scan_stock"] = matched_results[0]["Emiten"]
 
-    st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Potensi Reversal ke Hijau)</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Volume > 5 Miliar)</h2>", unsafe_allow_html=True)
 
     if "scan_results" in st.session_state and st.session_state["scan_results"]:
         res_df = pd.DataFrame(st.session_state["scan_results"])
-        st.success(f"Ditemukan **{len(res_df)} emiten** merah hari ini yang berpotensi kuat hijau (reversal) esok hari atau sesi siang!")
+        # Format nilai transaksi agar mudah dibaca dalam format miliar
+        res_df["Nilai Transaksi"] = res_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
+        
+        st.success(f"Ditemukan **{len(res_df)} emiten** dengan nilai transaksi di atas **Rp 5 Miliar** yang berpotensi reversal!")
         st.dataframe(
-            res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Volume"]]
+            res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Nilai Transaksi", "Volume Saham"]]
             .style.map(color_coding, subset=["Return (%)"]),
             use_container_width=True,
         )
@@ -388,7 +397,6 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
         st.markdown("---")
         emiten_list = [item["Emiten"] for item in st.session_state["scan_results"]]
         
-        # Callback untuk update state langsung tanpa refresh ulang halaman penuh
         def update_selected_stock():
             st.session_state["selected_scan_stock"] = st.session_state["stock_selectbox_key"]
 
@@ -403,20 +411,19 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
         if st.session_state["selected_scan_stock"]:
             render_comprehensive_chart(st.session_state["selected_scan_stock"])
     else:
-        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham merah.")
+        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham dengan volume > 5 Miliar.")
 
 # ================================================================== #
-# MENU 2 : Matrix & Deteksi Bandar Real-Time
+# MENU 2 : Matrix & Deteksi Bandar Real-Time (Filter Volume > 5 Milyar)
 # ================================================================== #
 elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
-    st.markdown("<h2>📋 Live Matrix & Analisis Bandarmology Akurasi Tinggi</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>📋 Live Matrix & Analisis Bandarmology (Volume > 5 Miliar)</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<p style='color: #94a3b8;'>Analisis perilaku akumulasi/distribusi institusi"
-        " berdasarkan volume terkini, tekanan order, dan posisi penutupan harga.</p>",
+        "<p style='color: #94a3b8;'>Menampilkan hanya saham-saham dengan nilai transaksi/volume > Rp 5 Miliar disertai analisis akumulasi institusi.</p>",
         unsafe_allow_html=True,
     )
 
-    load_all_btn = st.button("🔄 Muat Analisis Real-Time Seluruh Saham & Aktivitas Bandar")
+    load_all_btn = st.button("🔄 Muat Analisis Real-Time (Filter > 5 Miliar)")
 
     if "matrix_results" not in st.session_state:
         st.session_state["matrix_results"] = None
@@ -449,37 +456,43 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
                         high_today, low_today = df["High"].iloc[-1], df["Low"].iloc[-1]
                         vol_today = df["Volume"].iloc[-1]
 
-                        change_pct = (close_today - close_prev) / close_prev * 100
-                        range_price = high_today - low_today if high_today != low_today else 1
-                        close_position = (close_today - low_today) / range_price
+                        # Hitung nilai transaksi dalam Rupiah
+                        total_transaksi_rupiah = vol_today * close_today
 
-                        if change_pct > 0:
-                            if close_position > 0.7 and vol_today > 0:
-                                bandar_status = "🟢 Markup / Akumulasi Institusi Kuat"
-                                action_signal = "POTENSI LANJUT NAIK"
-                            else:
-                                bandar_status = "🟡 Penguatan Wajar / Profit Taking Terbatas"
-                                action_signal = "BERTAHAN / HOLD"
-                        elif change_pct < 0:
-                            if close_position < 0.3 and vol_today > 0:
-                                bandar_status = "🔴 Tekanan Distribusi Bandar Aktif"
-                                action_signal = "LANJUT TURUN"
-                            else:
-                                bandar_status = "🟢 Hidden Accumulation / Serok Bawah (Reversal)"
-                                action_signal = "POTENSI REVERSAL"
-                        else:
-                            bandar_status = "⚪ Sideways / Konsolidasi Tanpa Arah Jelas"
-                            action_signal = "WAIT AND SEE"
+                        # Filter ketat: Hanya masukkan emiten dengan nilai transaksi > 5 Miliar Rupiah
+                        if total_transaksi_rupiah >= 5_000_000_000:
+                            change_pct = (close_today - close_prev) / close_prev * 100
+                            range_price = high_today - low_today if high_today != low_today else 1
+                            close_position = (close_today - low_today) / range_price
 
-                        matrix_data.append({
-                            "Emiten": ticker.replace(".JK", ""),
-                            "Harga (Rp)": f"{int(round(close_today)):,}",
-                            "Return (%)": change_pct,
-                            "RSI": round(df["RSI"].iloc[-1], 1),
-                            "Volume": f"{int(vol_today):,}",
-                            "Analisis Bandarmology": bandar_status,
-                            "Sinyal Potensial": action_signal,
-                        })
+                            if change_pct > 0:
+                                if close_position > 0.7 and vol_today > 0:
+                                    bandar_status = "🟢 Markup / Akumulasi Institusi Kuat"
+                                    action_signal = "POTENSI LANJUT NAIK"
+                                else:
+                                    bandar_status = "🟡 Penguatan Wajar / Profit Taking Terbatas"
+                                    action_signal = "BERTAHAN / HOLD"
+                            elif change_pct < 0:
+                                if close_position < 0.3 and vol_today > 0:
+                                    bandar_status = "🔴 Tekanan Distribusi Bandar Aktif"
+                                    action_signal = "LANJUT TURUN"
+                                else:
+                                    bandar_status = "🟢 Hidden Accumulation / Serok Bawah (Reversal)"
+                                    action_signal = "POTENSI REVERSAL"
+                            else:
+                                bandar_status = "⚪ Sideways / Konsolidasi Tanpa Arah Jelas"
+                                action_signal = "WAIT AND SEE"
+
+                            matrix_data.append({
+                                "Emiten": ticker.replace(".JK", ""),
+                                "Harga (Rp)": f"{int(round(close_today)):,}",
+                                "Return (%)": change_pct,
+                                "RSI": round(df["RSI"].iloc[-1], 1),
+                                "Nilai Transaksi (Rp)": total_transaksi_rupiah,
+                                "Volume Saham": f"{int(vol_today):,}",
+                                "Analisis Bandarmology": bandar_status,
+                                "Sinyal Potensial": action_signal,
+                            })
                 except Exception:
                     continue
 
@@ -489,10 +502,12 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
 
     if st.session_state["matrix_results"]:
         matrix_df = pd.DataFrame(st.session_state["matrix_results"])
-        st.success(f"Berhasil menganalisis data real-time untuk **{len(matrix_df)} emiten**!")
+        matrix_df["Nilai Transaksi"] = matrix_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
+        
+        st.success(f"Berhasil menyaring dan menganalisis **{len(matrix_df)} emiten** dengan volume > Rp 5 Miliar!")
         st.dataframe(
             matrix_df[
-                ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Volume",
+                ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Nilai Transaksi",
                  "Analisis Bandarmology", "Sinyal Potensial"]
             ].style.map(color_coding, subset=["Return (%)"]),
             use_container_width=True,
