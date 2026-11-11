@@ -357,10 +357,8 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
                         last_close = df["Close"].iloc[-1]
                         vol_today = df["Volume"].iloc[-1]
                         
-                        # Nilai transaksi/volume dalam Rupiah (Volume lembar saham * Harga Close)
                         total_transaksi_rupiah = vol_today * last_close
 
-                        # Filter: Penurunan hari ini, RSI Oversold/Ideal, dan Volume/Nilai Transaksi > 5 Miliar Rupiah
                         if r_today <= max_red and rsi_val <= 45 and total_transaksi_rupiah >= 5_000_000_000:
                             change = r_today * 100
                             matched_results.append({
@@ -379,12 +377,13 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
         st.session_state["scan_results"] = matched_results
         if matched_results:
             st.session_state["selected_scan_stock"] = matched_results[0]["Emiten"]
+        else:
+            st.session_state["selected_scan_stock"] = None
 
     st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Volume > 5 Miliar)</h2>", unsafe_allow_html=True)
 
     if "scan_results" in st.session_state and st.session_state["scan_results"]:
         res_df = pd.DataFrame(st.session_state["scan_results"])
-        # Format nilai transaksi agar mudah dibaca dalam format miliar
         res_df["Nilai Transaksi"] = res_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
         
         st.success(f"Ditemukan **{len(res_df)} emiten** dengan nilai transaksi di atas **Rp 5 Miliar** yang berpotensi reversal!")
@@ -411,7 +410,7 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
         if st.session_state["selected_scan_stock"]:
             render_comprehensive_chart(st.session_state["selected_scan_stock"])
     else:
-        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham dengan volume > 5 Miliar.")
+        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham dengan volume > 5 Miliar (atau hasil scan kosong).")
 
 # ================================================================== #
 # MENU 2 : Matrix & Deteksi Bandar Real-Time (Filter Volume > 5 Milyar)
@@ -456,10 +455,8 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
                         high_today, low_today = df["High"].iloc[-1], df["Low"].iloc[-1]
                         vol_today = df["Volume"].iloc[-1]
 
-                        # Hitung nilai transaksi dalam Rupiah
                         total_transaksi_rupiah = vol_today * close_today
 
-                        # Filter ketat: Hanya masukkan emiten dengan nilai transaksi > 5 Miliar Rupiah
                         if total_transaksi_rupiah >= 5_000_000_000:
                             change_pct = (close_today - close_prev) / close_prev * 100
                             range_price = high_today - low_today if high_today != low_today else 1
