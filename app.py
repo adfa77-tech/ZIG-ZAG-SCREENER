@@ -382,35 +382,40 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
 
     st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Volume > 5 Miliar)</h2>", unsafe_allow_html=True)
 
+    # Pengecekan aman agar tidak terjadi KeyError jika hasil scan kosong
     if "scan_results" in st.session_state and st.session_state["scan_results"]:
         res_df = pd.DataFrame(st.session_state["scan_results"])
-        res_df["Nilai Transaksi"] = res_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
         
-        st.success(f"Ditemukan **{len(res_df)} emiten** dengan nilai transaksi di atas **Rp 5 Miliar** yang berpotensi reversal!")
-        st.dataframe(
-            res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Nilai Transaksi", "Volume Saham"]]
-            .style.map(color_coding, subset=["Return (%)"]),
-            use_container_width=True,
-        )
+        if not res_df.empty and "Nilai Transaksi (Rp)" in res_df.columns:
+            res_df["Nilai Transaksi"] = res_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
+            
+            st.success(f"Ditemukan **{len(res_df)} emiten** dengan nilai transaksi di atas **Rp 5 Miliar** yang berpotensi reversal!")
+            st.dataframe(
+                res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Nilai Transaksi", "Volume Saham"]]
+                .style.map(color_coding, subset=["Return (%)"]),
+                use_container_width=True,
+            )
 
-        st.markdown("---")
-        emiten_list = [item["Emiten"] for item in st.session_state["scan_results"]]
-        
-        def update_selected_stock():
-            st.session_state["selected_scan_stock"] = st.session_state["stock_selectbox_key"]
+            st.markdown("---")
+            emiten_list = [item["Emiten"] for item in st.session_state["scan_results"]]
+            
+            def update_selected_stock():
+                st.session_state["selected_scan_stock"] = st.session_state["stock_selectbox_key"]
 
-        selected_emiten = st.selectbox(
-            "👉 Pilih Nama Saham untuk Membuka Chart Candlestick Lengkap:",
-            emiten_list,
-            index=emiten_list.index(st.session_state["selected_scan_stock"]) if st.session_state["selected_scan_stock"] in emiten_list else 0,
-            key="stock_selectbox_key",
-            on_change=update_selected_stock
-        )
+            selected_emiten = st.selectbox(
+                "👉 Pilih Nama Saham untuk Membuka Chart Candlestick Lengkap:",
+                emiten_list,
+                index=emiten_list.index(st.session_state["selected_scan_stock"]) if st.session_state["selected_scan_stock"] in emiten_list else 0,
+                key="stock_selectbox_key",
+                on_change=update_selected_stock
+            )
 
-        if st.session_state["selected_scan_stock"]:
-            render_comprehensive_chart(st.session_state["selected_scan_stock"])
+            if st.session_state["selected_scan_stock"]:
+                render_comprehensive_chart(st.session_state["selected_scan_stock"])
+        else:
+            st.warning("Tidak ada data emiten yang valid untuk ditampilkan.")
     else:
-        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham dengan volume > 5 Miliar (atau hasil scan kosong).")
+        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham dengan volume > 5 Miliar.")
 
 # ================================================================== #
 # MENU 2 : Matrix & Deteksi Bandar Real-Time (Filter Volume > 5 Milyar)
@@ -499,26 +504,27 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
 
     if st.session_state["matrix_results"]:
         matrix_df = pd.DataFrame(st.session_state["matrix_results"])
-        matrix_df["Nilai Transaksi"] = matrix_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
-        
-        st.success(f"Berhasil menyaring dan menganalisis **{len(matrix_df)} emiten** dengan volume > Rp 5 Miliar!")
-        st.dataframe(
-            matrix_df[
-                ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Nilai Transaksi",
-                 "Analisis Bandarmology", "Sinyal Potensial"]
-            ].style.map(color_coding, subset=["Return (%)"]),
-            use_container_width=True,
-        )
+        if not matrix_df.empty and "Nilai Transaksi (Rp)" in matrix_df.columns:
+            matrix_df["Nilai Transaksi"] = matrix_df["Nilai Transaksi (Rp)"].apply(lambda x: f"Rp {x:,.0f}")
+            
+            st.success(f"Berhasil menyaring dan menganalisis **{len(matrix_df)} emiten** dengan volume > Rp 5 Miliar!")
+            st.dataframe(
+                matrix_df[
+                    ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Nilai Transaksi",
+                     "Analisis Bandarmology", "Sinyal Potensial"]
+                ].style.map(color_coding, subset=["Return (%)"]),
+                use_container_width=True,
+            )
 
-        st.markdown("---")
-        matrix_emiten_list = matrix_df["Emiten"].tolist()
-        
-        selected_matrix_emiten = st.selectbox(
-            "👉 Pilih Nama Saham dari Matrix untuk Melihat Grafik Candlestick:",
-            matrix_emiten_list,
-            key="matrix_selectbox_key"
-        )
-        if selected_matrix_emiten:
-            render_comprehensive_chart(selected_matrix_emiten)
+            st.markdown("---")
+            matrix_emiten_list = matrix_df["Emiten"].tolist()
+            
+            selected_matrix_emiten = st.selectbox(
+                "👉 Pilih Nama Saham dari Matrix untuk Melihat Grafik Candlestick:",
+                matrix_emiten_list,
+                key="matrix_selectbox_key"
+            )
+            if selected_matrix_emiten:
+                render_comprehensive_chart(selected_matrix_emiten)
     else:
         st.info("👆 Klik tombol di atas untuk memuat matriks live berkecepatan tinggi.")
