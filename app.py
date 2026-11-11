@@ -118,7 +118,6 @@ FALLBACK_TICKERS = [
 # ------------------------------------------------------------------ #
 def calculate_technical_indicators(df):
     """Menghitung indikator teknikal MA, MACD, RSI, dan Stochastic."""
-    # Moving Average
     df["MA5"] = df["Close"].rolling(window=5).mean()
     df["MA20"] = df["Close"].rolling(window=20).mean()
     df["MA200"] = df["Close"].rolling(window=200).mean()
@@ -146,9 +145,6 @@ def calculate_technical_indicators(df):
     return df
 
 
-# ------------------------------------------------------------------ #
-# Data Fetchers (Real-Time Optimization)
-# ------------------------------------------------------------------ #
 @st.cache_data(ttl=60)
 def get_market_indices():
     """Mengambil data real-time harga IHSG dan ISSI dari Yahoo Finance."""
@@ -192,8 +188,9 @@ def _flatten(df):
     return df
 
 
-def fetch_single_stock(ticker, period="60d", interval="1d"):
-    """Mengambil data historis/real-time satu emiten secara aman."""
+@st.cache_data(ttl=300)
+def fetch_single_stock(ticker, period="120d", interval="1d"):
+    """Mengambil data historis satu emiten secara aman dengan cache."""
     try:
         df = _flatten(yf.download(ticker, period=period, interval=interval, progress=False))
         if not df.empty and len(df) >= 15:
@@ -205,7 +202,7 @@ def fetch_single_stock(ticker, period="60d", interval="1d"):
 
 
 # ------------------------------------------------------------------ #
-# Header & UI Layout
+# Header & Layout
 # ------------------------------------------------------------------ #
 st.markdown(
     "<h1 style='text-align: center; margin-bottom: 0;'>⚡ ISSI INSTITUTIONAL"
@@ -253,92 +250,21 @@ def color_coding(val):
 
 
 # ================================================================== #
-# MENU 1 : Screener Zigzag (Merah Hari Ini ke Potensi Hijau / Reversal)
+# RENDER GRAFIK CANDLESTICK UTAMA DENGAN INDIKATOR LENGKAP
 # ================================================================== #
-if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hijau)":
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("<h2>⚙️ Pengaturan Parameter</h2>", unsafe_allow_html=True)
-    max_red = st.sidebar.slider("Maksimal Penurunan Hari Ini (%)", -10.0, -0.1, -1.0, 0.5) / 100
-    lookback_days = st.sidebar.number_input("Periode Analisis (Hari)", 30, 120, 60, 10)
+def render_comprehensive_chart(emiten_code):
+    st.markdown(f"### 📊 Live Candlestick Chart & Technical Indicators: {emiten_code}")
+    with st.spinner(f"Memuat data historis dan indikator teknikal untuk {emiten_code}..."):
+        _, df = fetch_single_stock(f"{emiten_code}.JK", period="120d", interval="1d")
+        if df is not None and not df.empty:
+            chart_df = df.tail(80)
 
-    scan_button = st.sidebar.button("🚀 Jalankan Live Scan Potensi Reversal Zigzag")
-
-    if scan_button:
-        tickers = get_issi_tickers()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        matched_results = []
-        total = len(tickers)
-        completed = 0
-
-        # Parallel fetching untuk performa real-time berkecepatan tinggi
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_ticker = {
-                executor.submit(fetch_single_stock, t, period=f"{lookback_days}d", interval="1d"): t
-                for t in tickers
-            }
-
-            for future in as_completed(future_to_ticker):
-                completed += 1
-                progress_bar.progress(completed / total)
-                ticker = future_to_ticker[future]
-                status_text.text(f"Memindai real-time [{completed}/{total}]: {ticker.replace('.JK','')}...")
-
-                try:
-                    _, df = future.result()
-                    if df is not None and len(df) >= 5:
-                        df["ChangePct"] = df["Close"].pct_change()
-                        r_prev, r_today = df["ChangePct"].tail(2).values
-
-                        # Formula Zigzag Reversal: Hari ini merah (<= max_red), didahului hari hijau/pantulan,
-                        # atau kondisi oversold (RSI < 40) yang siap mantul (Merah pagi, hijau siangnya / rebound esok hari)
-                        rsi_val = df["RSI"].iloc[-1]
-                        if r_today <= max_red and rsi_val <= 45:
-                            last_close = df["Close"].iloc[-1]
-                            change = df["ChangePct"].iloc[-1] * 100
-                            matched_results.append({
-                                "Emiten": ticker.replace(".JK", ""),
-                                "Harga Terakhir": f"{int(round(last_close)):,}",
-                                "Return (%)": change,
-                                "RSI": round(rsi_val, 1),
-                                "Volume": f"{int(df['Volume'].iloc[-1]):,}",
-                                "RawData": df,
-                            })
-                except Exception:
-                    continue
-
-        progress_bar.empty()
-        status_text.empty()
-
-        st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Potensi Reversal ke Hijau)</h2>", unsafe_allow_html=True)
-
-        if matched_results:
-            res_df = pd.DataFrame(matched_results)
-            st.success(f"Ditemukan **{len(res_df)} emiten** merah hari ini yang berpotensi kuat hijau (reversal) esok hari atau sesi siang!")
-            st.dataframe(
-                res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Volume"]]
-                .style.map(color_coding, subset=["Return (%)"]),
-                use_container_width=True,
-            )
-
-            st.markdown("### 📊 Interactive Candlestick Chart & Technical Indicators (MA 5, 20, 200, Volume, MACD, RSI, Stoch)")
-            
-            # Pilihan emiten untuk langsung membuka chart candlestick komprehensif
-            selected_emiten = st.selectbox(
-                "Pilih Emiten untuk Melihat Detail Grafik Candlestick & Indikator Teknikal:",
-                [item["Emiten"] for item in matched_results],
-            )
-            selected_item = next(item for item in matched_results if item["Emiten"] == selected_emiten)
-            chart_df = selected_item["RawData"].tail(60)
-
-            # Membuat Plotly Subplots (5 panel: Candlestick+MA, Volume, MACD, RSI, Stoch)
             fig = make_subplots(
                 rows=5, cols=1, shared_xaxes=True,
                 vertical_spacing=0.03,
                 row_heights=[0.45, 0.15, 0.13, 0.13, 0.14],
                 subplot_titles=(
-                    f"Chart Harga & Moving Average - {selected_emiten}",
+                    f"Chart Harga & Moving Average (MA 5, 20, 200) - {emiten_code}",
                     "Volume",
                     "MACD (12, 26, 9)",
                     "RSI (14)",
@@ -383,7 +309,99 @@ if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hija
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("Tidak ditemukan saham merah yang memenuhi kriteria pantulan zigzag reversal pada sesi live saat ini.")
+            st.error(f"Gagal mengambil data historis untuk emiten {emiten_code}.")
+
+
+# ================================================================== #
+# MENU 1 : Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hijau)
+# ================================================================== #
+if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hijau)":
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<h2>⚙️ Pengaturan Parameter</h2>", unsafe_allow_html=True)
+    max_red = st.sidebar.slider("Maksimal Penurunan Hari Ini (%)", -10.0, -0.1, -1.0, 0.5) / 100
+    lookback_days = st.sidebar.number_input("Periode Analisis (Hari)", 30, 120, 60, 10)
+
+    scan_button = st.sidebar.button("🚀 Jalankan Live Scan Potensi Reversal Zigzag")
+
+    # Inisialisasi state session untuk menyimpan pilihan emiten agar tidak mereset
+    if "selected_scan_stock" not in st.session_state:
+        st.session_state["selected_scan_stock"] = None
+
+    if scan_button:
+        tickers = get_issi_tickers()
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        matched_results = []
+        total = len(tickers)
+        completed = 0
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_ticker = {
+                executor.submit(fetch_single_stock, t, period=f"{lookback_days}d", interval="1d"): t
+                for t in tickers
+            }
+
+            for future in as_completed(future_to_ticker):
+                completed += 1
+                progress_bar.progress(completed / total)
+                ticker = future_to_ticker[future]
+                status_text.text(f"Memindai real-time [{completed}/{total}]: {ticker.replace('.JK','')}...")
+
+                try:
+                    _, df = future.result()
+                    if df is not None and len(df) >= 5:
+                        df["ChangePct"] = df["Close"].pct_change()
+                        r_today = df["ChangePct"].iloc[-1]
+                        rsi_val = df["RSI"].iloc[-1]
+
+                        if r_today <= max_red and rsi_val <= 45:
+                            last_close = df["Close"].iloc[-1]
+                            change = df["ChangePct"].iloc[-1] * 100
+                            matched_results.append({
+                                "Emiten": ticker.replace(".JK", ""),
+                                "Harga Terakhir": f"{int(round(last_close)):,}",
+                                "Return (%)": change,
+                                "RSI": round(rsi_val, 1),
+                                "Volume": f"{int(df['Volume'].iloc[-1]):,}",
+                            })
+                except Exception:
+                    continue
+
+        progress_bar.empty()
+        status_text.empty()
+        st.session_state["scan_results"] = matched_results
+        if matched_results:
+            st.session_state["selected_scan_stock"] = matched_results[0]["Emiten"]
+
+    st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Potensi Reversal ke Hijau)</h2>", unsafe_allow_html=True)
+
+    if "scan_results" in st.session_state and st.session_state["scan_results"]:
+        res_df = pd.DataFrame(st.session_state["scan_results"])
+        st.success(f"Ditemukan **{len(res_df)} emiten** merah hari ini yang berpotensi kuat hijau (reversal) esok hari atau sesi siang!")
+        st.dataframe(
+            res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Volume"]]
+            .style.map(color_coding, subset=["Return (%)"]),
+            use_container_width=True,
+        )
+
+        st.markdown("---")
+        emiten_list = [item["Emiten"] for item in st.session_state["scan_results"]]
+        
+        # Callback untuk update state langsung tanpa refresh ulang halaman penuh
+        def update_selected_stock():
+            st.session_state["selected_scan_stock"] = st.session_state["stock_selectbox_key"]
+
+        selected_emiten = st.selectbox(
+            "👉 Pilih Nama Saham untuk Membuka Chart Candlestick Lengkap:",
+            emiten_list,
+            index=emiten_list.index(st.session_state["selected_scan_stock"]) if st.session_state["selected_scan_stock"] in emiten_list else 0,
+            key="stock_selectbox_key",
+            on_change=update_selected_stock
+        )
+
+        if st.session_state["selected_scan_stock"]:
+            render_comprehensive_chart(st.session_state["selected_scan_stock"])
     else:
         st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham merah.")
 
@@ -399,6 +417,9 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
     )
 
     load_all_btn = st.button("🔄 Muat Analisis Real-Time Seluruh Saham & Aktivitas Bandar")
+
+    if "matrix_results" not in st.session_state:
+        st.session_state["matrix_results"] = None
 
     if load_all_btn:
         tickers = get_issi_tickers()
@@ -464,18 +485,28 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
 
         progress_bar.empty()
         status_text.empty()
+        st.session_state["matrix_results"] = matrix_data
 
-        if matrix_data:
-            matrix_df = pd.DataFrame(matrix_data)
-            st.success(f"Berhasil menganalisis data real-time untuk **{len(matrix_df)} emiten**!")
-            st.dataframe(
-                matrix_df[
-                    ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Volume",
-                     "Analisis Bandarmology", "Sinyal Potensial"]
-                ].style.map(color_coding, subset=["Return (%)"]),
-                use_container_width=True,
-            )
-        else:
-            st.error("Gagal memuat matriks data pasar. Periksa kembali koneksi internet Anda.")
+    if st.session_state["matrix_results"]:
+        matrix_df = pd.DataFrame(st.session_state["matrix_results"])
+        st.success(f"Berhasil menganalisis data real-time untuk **{len(matrix_df)} emiten**!")
+        st.dataframe(
+            matrix_df[
+                ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Volume",
+                 "Analisis Bandarmology", "Sinyal Potensial"]
+            ].style.map(color_coding, subset=["Return (%)"]),
+            use_container_width=True,
+        )
+
+        st.markdown("---")
+        matrix_emiten_list = matrix_df["Emiten"].tolist()
+        
+        selected_matrix_emiten = st.selectbox(
+            "👉 Pilih Nama Saham dari Matrix untuk Melihat Grafik Candlestick:",
+            matrix_emiten_list,
+            key="matrix_selectbox_key"
+        )
+        if selected_matrix_emiten:
+            render_comprehensive_chart(selected_matrix_emiten)
     else:
         st.info("👆 Klik tombol di atas untuk memuat matriks live berkecepatan tinggi.")
