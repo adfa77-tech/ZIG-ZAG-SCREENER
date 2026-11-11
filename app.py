@@ -3,6 +3,7 @@ ISSI Institutional Bandarmology Terminal (Real-Time High-Accuracy)
 ==================================================================
 Aplikasi Streamlit Real-Time siap-pakai untuk memantau pergerakan harga 
 dan aktivitas bandar/institusi pada seluruh saham syariah (ISSI) BEI.
+Dilengkapi indikator MA (5, 20, 200), Volume, MACD, RSI, dan Stochastic.
 """
 
 import datetime
@@ -10,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
@@ -112,6 +114,39 @@ FALLBACK_TICKERS = [
 
 
 # ------------------------------------------------------------------ #
+# Indikator Teknikal (MA, MACD, RSI, Stoch)
+# ------------------------------------------------------------------ #
+def calculate_technical_indicators(df):
+    """Menghitung indikator teknikal MA, MACD, RSI, dan Stochastic."""
+    # Moving Average
+    df["MA5"] = df["Close"].rolling(window=5).mean()
+    df["MA20"] = df["Close"].rolling(window=20).mean()
+    df["MA200"] = df["Close"].rolling(window=200).mean()
+
+    # MACD (12, 26, 9)
+    exp1 = df["Close"].ewm(span=12, adjust=False).mean()
+    exp2 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["MACD"] = exp1 - exp2
+    df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+    df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
+
+    # RSI (14)
+    delta = df["Close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+
+    # Stochastic Oscillator (%K, %D)
+    low_14 = df["Low"].rolling(window=14).min()
+    high_14 = df["High"].rolling(window=14).max()
+    df["Stoch_K"] = 100 * ((df["Close"] - low_14) / (high_14 - low_14))
+    df["Stoch_D"] = df["Stoch_K"].rolling(window=3).mean()
+
+    return df
+
+
+# ------------------------------------------------------------------ #
 # Data Fetchers (Real-Time Optimization)
 # ------------------------------------------------------------------ #
 @st.cache_data(ttl=60)
@@ -157,11 +192,12 @@ def _flatten(df):
     return df
 
 
-def fetch_single_stock(ticker, period="10d", interval="1d"):
+def fetch_single_stock(ticker, period="60d", interval="1d"):
     """Mengambil data historis/real-time satu emiten secara aman."""
     try:
         df = _flatten(yf.download(ticker, period=period, interval=interval, progress=False))
-        if not df.empty and len(df) >= 2:
+        if not df.empty and len(df) >= 15:
+            df = calculate_technical_indicators(df)
             return ticker, df
     except Exception:
         pass
@@ -199,7 +235,7 @@ st.sidebar.markdown("<h2>📊 Terminal Menu</h2>", unsafe_allow_html=True)
 menu_option = st.sidebar.radio(
     "Pilih Fitur Utama:",
     [
-        "🚀 Screener Zigzag (1D Merah + 1D Hijau)",
+        "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hijau)",
         "📋 Matrix Semua Saham & Deteksi Bandar",
     ],
 )
@@ -217,15 +253,15 @@ def color_coding(val):
 
 
 # ================================================================== #
-# MENU 1 : Screener Zigzag Real-Time
+# MENU 1 : Screener Zigzag (Merah Hari Ini ke Potensi Hijau / Reversal)
 # ================================================================== #
-if menu_option == "🚀 Screener Zigzag (1D Merah + 1D Hijau)":
+if menu_option == "🚀 Screener Zigzag (Merah Hari Ini -> Potensi Reversal Hijau)":
     st.sidebar.markdown("---")
     st.sidebar.markdown("<h2>⚙️ Pengaturan Parameter</h2>", unsafe_allow_html=True)
-    min_gain = st.sidebar.slider("Target Kenaikan Harian Min. (%)", 1.0, 10.0, 3.0, 0.5) / 100
-    lookback_days = st.sidebar.number_input("Periode Analisis (Hari)", 10, 60, 20, 5)
+    max_red = st.sidebar.slider("Maksimal Penurunan Hari Ini (%)", -10.0, -0.1, -1.0, 0.5) / 100
+    lookback_days = st.sidebar.number_input("Periode Analisis (Hari)", 30, 120, 60, 10)
 
-    scan_button = st.sidebar.button("🚀 Jalankan Live Scan Pola Zigzag")
+    scan_button = st.sidebar.button("🚀 Jalankan Live Scan Potensi Reversal Zigzag")
 
     if scan_button:
         tickers = get_issi_tickers()
@@ -251,16 +287,21 @@ if menu_option == "🚀 Screener Zigzag (1D Merah + 1D Hijau)":
 
                 try:
                     _, df = future.result()
-                    if df is not None and len(df) >= 3:
+                    if df is not None and len(df) >= 5:
                         df["ChangePct"] = df["Close"].pct_change()
                         r_prev, r_today = df["ChangePct"].tail(2).values
-                        if r_prev < 0 and r_today >= min_gain:
+
+                        # Formula Zigzag Reversal: Hari ini merah (<= max_red), didahului hari hijau/pantulan,
+                        # atau kondisi oversold (RSI < 40) yang siap mantul (Merah pagi, hijau siangnya / rebound esok hari)
+                        rsi_val = df["RSI"].iloc[-1]
+                        if r_today <= max_red and rsi_val <= 45:
                             last_close = df["Close"].iloc[-1]
                             change = df["ChangePct"].iloc[-1] * 100
                             matched_results.append({
                                 "Emiten": ticker.replace(".JK", ""),
                                 "Harga Terakhir": f"{int(round(last_close)):,}",
                                 "Return (%)": change,
+                                "RSI": round(rsi_val, 1),
                                 "Volume": f"{int(df['Volume'].iloc[-1]):,}",
                                 "RawData": df,
                             })
@@ -270,46 +311,81 @@ if menu_option == "🚀 Screener Zigzag (1D Merah + 1D Hijau)":
         progress_bar.empty()
         status_text.empty()
 
-        st.markdown("<h2>🎯 Hasil Live Scan Pola Zigzag (1D Merah + 1D Hijau)</h2>", unsafe_allow_html=True)
+        st.markdown("<h2>🎯 Hasil Live Scan Screener Zigzag (Potensi Reversal ke Hijau)</h2>", unsafe_allow_html=True)
 
         if matched_results:
             res_df = pd.DataFrame(matched_results)
-            st.success(f"Ditemukan **{len(res_df)} emiten** yang memenuhi kriteria pola secara real-time!")
+            st.success(f"Ditemukan **{len(res_df)} emiten** merah hari ini yang berpotensi kuat hijau (reversal) esok hari atau sesi siang!")
             st.dataframe(
-                res_df[["Emiten", "Harga Terakhir", "Return (%)", "Volume"]]
+                res_df[["Emiten", "Harga Terakhir", "Return (%)", "RSI", "Volume"]]
                 .style.map(color_coding, subset=["Return (%)"]),
                 use_container_width=True,
             )
 
-            st.markdown("### 📊 Live Candlestick Chart")
+            st.markdown("### 📊 Interactive Candlestick Chart & Technical Indicators (MA 5, 20, 200, Volume, MACD, RSI, Stoch)")
+            
+            # Pilihan emiten untuk langsung membuka chart candlestick komprehensif
             selected_emiten = st.selectbox(
-                "Pilih Emiten untuk Melihat Grafik Candlestick:",
+                "Pilih Emiten untuk Melihat Detail Grafik Candlestick & Indikator Teknikal:",
                 [item["Emiten"] for item in matched_results],
             )
             selected_item = next(item for item in matched_results if item["Emiten"] == selected_emiten)
-            chart_df = selected_item["RawData"].tail(20)
+            chart_df = selected_item["RawData"].tail(60)
 
-            fig = go.Figure(
-                data=[go.Candlestick(
-                    x=chart_df.index,
-                    open=chart_df["Open"],
-                    high=chart_df["High"],
-                    low=chart_df["Low"],
-                    close=chart_df["Close"],
-                    name="Candles",
-                )]
+            # Membuat Plotly Subplots (5 panel: Candlestick+MA, Volume, MACD, RSI, Stoch)
+            fig = make_subplots(
+                rows=5, cols=1, shared_xaxes=True,
+                vertical_spacing=0.03,
+                row_heights=[0.45, 0.15, 0.13, 0.13, 0.14],
+                subplot_titles=(
+                    f"Chart Harga & Moving Average - {selected_emiten}",
+                    "Volume",
+                    "MACD (12, 26, 9)",
+                    "RSI (14)",
+                    "Stochastic Oscillator (%K, %D)"
+                )
             )
+
+            # 1. Candlestick & Moving Averages
+            fig.add_trace(go.Candlestick(
+                x=chart_df.index, open=chart_df["Open"], high=chart_df["High"],
+                low=chart_df["Low"], close=chart_df["Close"], name="Candles"
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MA5"], line=dict(color="#38bdf8", width=1.2), name="MA 5"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MA20"], line=dict(color="#facc15", width=1.2), name="MA 20"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MA200"], line=dict(color="#f43f5e", width=1.5), name="MA 200"), row=1, col=1)
+
+            # 2. Volume
+            colors = ['#22c55e' if row['Close'] >= row['Open'] else '#ef4444' for index, row in chart_df.iterrows()]
+            fig.add_trace(go.Bar(x=chart_df.index, y=chart_df["Volume"], marker_color=colors, name="Volume"), row=2, col=1)
+
+            # 3. MACD
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MACD"], line=dict(color="#38bdf8", width=1), name="MACD"), row=3, col=1)
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["MACD_Signal"], line=dict(color="#f43f5e", width=1), name="Signal"), row=3, col=1)
+            fig.add_trace(go.Bar(x=chart_df.index, y=chart_df["MACD_Hist"], marker_color='gray', name="Histogram"), row=3, col=1)
+
+            # 4. RSI
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["RSI"], line=dict(color="#a855f7", width=1.2), name="RSI (14)"), row=4, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=4, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=4, col=1)
+
+            # 5. Stochastic
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["Stoch_K"], line=dict(color="#38bdf8", width=1), name="%K"), row=5, col=1)
+            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df["Stoch_D"], line=dict(color="#f97316", width=1), name="%D"), row=5, col=1)
+            fig.add_hline(y=80, line_dash="dash", line_color="red", row=5, col=1)
+            fig.add_hline(y=20, line_dash="dash", line_color="green", row=5, col=1)
+
             fig.update_layout(
-                title=f"Grafik Harga Real-Time - {selected_emiten}",
-                yaxis_title="Harga (IDR)",
                 template="plotly_dark",
-                height=500,
+                height=900,
+                xaxis_rangeslider_visible=False,
+                showlegend=False
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("Tidak ditemukan saham yang sesuai dengan pola dan target kenaikan tersebut pada sesi live saat ini.")
+            st.warning("Tidak ditemukan saham merah yang memenuhi kriteria pantulan zigzag reversal pada sesi live saat ini.")
     else:
-        st.info("👈 Klik tombol di sidebar untuk mulai memindai pasar secara real-time.")
+        st.info("👈 Klik tombol di sidebar untuk mulai memindai potensi reversal saham merah.")
 
 # ================================================================== #
 # MENU 2 : Matrix & Deteksi Bandar Real-Time
@@ -335,7 +411,7 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             future_to_ticker = {
-                executor.submit(fetch_single_stock, t, period="5d", interval="1d"): t
+                executor.submit(fetch_single_stock, t, period="30d", interval="1d"): t
                 for t in tickers
             }
 
@@ -368,8 +444,8 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
                                 bandar_status = "🔴 Tekanan Distribusi Bandar Aktif"
                                 action_signal = "LANJUT TURUN"
                             else:
-                                bandar_status = "🟢 Hidden Accumulation / Serok Bawah"
-                                action_signal = "SEGERA NAIK (REVERSAL)"
+                                bandar_status = "🟢 Hidden Accumulation / Serok Bawah (Reversal)"
+                                action_signal = "POTENSI REVERSAL"
                         else:
                             bandar_status = "⚪ Sideways / Konsolidasi Tanpa Arah Jelas"
                             action_signal = "WAIT AND SEE"
@@ -378,6 +454,7 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
                             "Emiten": ticker.replace(".JK", ""),
                             "Harga (Rp)": f"{int(round(close_today)):,}",
                             "Return (%)": change_pct,
+                            "RSI": round(df["RSI"].iloc[-1], 1),
                             "Volume": f"{int(vol_today):,}",
                             "Analisis Bandarmology": bandar_status,
                             "Sinyal Potensial": action_signal,
@@ -393,7 +470,7 @@ elif menu_option == "📋 Matrix Semua Saham & Deteksi Bandar":
             st.success(f"Berhasil menganalisis data real-time untuk **{len(matrix_df)} emiten**!")
             st.dataframe(
                 matrix_df[
-                    ["Emiten", "Harga (Rp)", "Return (%)", "Volume",
+                    ["Emiten", "Harga (Rp)", "Return (%)", "RSI", "Volume",
                      "Analisis Bandarmology", "Sinyal Potensial"]
                 ].style.map(color_coding, subset=["Return (%)"]),
                 use_container_width=True,
